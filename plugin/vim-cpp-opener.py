@@ -8,12 +8,10 @@ import os
 import glob
 
 # TODO: open only single cpp file
-# TODO: case insensitive as lower priority
 # TODO: jump to line directly
 # TODO: better way to find project dir
 # TODO: better filtering (for cmake projects as well)
 # TODO: optional customization file, which will:
-# TODO: configuring file extensions
 #  inform about where root dir is
 #  specify matched files
 #  specify filtered dirs
@@ -199,11 +197,12 @@ def fullListing(cur_dir):
     return out
 
 def matchFiles(pattern, files):
+    pattern = pattern.lower()
     out = []
     for (fdir, files) in files:
         for ffile in files:
             path = os.path.join(fdir, ffile)
-            if pattern in path:
+            if pattern in path.lower():
                 out.append(os.path.abspath(path))
     return out
 
@@ -224,7 +223,16 @@ def rankMatching(fpath, pattern):
         return 1
     if pattern in bname:
         return 2
-    return 3
+
+    pattern = pattern.lower()
+    if base_name.lower() == pattern:
+        return 3
+    if bname.lower() == pattern:
+        return 4
+    if pattern in bname:
+        return 5
+
+    return 9999
 
 def filterBestMatches(flist, pattern):
     if len(flist) == 0:
