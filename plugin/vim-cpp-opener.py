@@ -17,11 +17,11 @@ def logFunc(name, start_time, params):
         for (key, value) in params:
             print("  {} = {}".format(key, value))
 
-# TODO: open only single cpp file
 # TODO: jump to line directly
 # TODO: better way to find project dir
 # TODO: better filtering (for cmake projects as well)
 # TODO: optional customization file, which will:
+# TODO: quick way to open directory ?
 #  inform about where root dir is
 #  specify matched files
 #  specify filtered dirs
@@ -226,24 +226,31 @@ def openCppFile(file_path, split):
     if not tryJumpLocationInOpenedTab(file_path):
         vim.command(cmd + file_path)
 
-def rankMatching(fpath, pattern):
-    base_name = os.path.basename(fpath)
-    if base_name == pattern:
+def rankMatching(file_path, pattern):
+    lo_pattern = pattern.lower()
+
+    file_name = os.path.basename(file_path)
+    if file_name == pattern:
         return 0
-
-    (bname, bext) = os.path.splitext(base_name)
-    if bname == pattern:
+    if file_name.lower() == lo_pattern:
         return 1
-    if pattern in bname:
-        return 2
 
-    pattern = pattern.lower()
-    if base_name.lower() == pattern:
+    (base, ext) = os.path.splitext(file_name)
+
+    if pattern == base:
+        return 2
+    if lo_pattern == base.lower():
         return 3
-    if bname.lower() == pattern:
+
+    if pattern in base:
         return 4
-    if pattern in bname:
+    if lo_pattern in base.lower():
         return 5
+
+    if pattern in file_name:
+        return 6
+    if lo_pattern in file_name.lower():
+        return 7
 
     return 9999
 
@@ -256,6 +263,9 @@ def filterBestMatches(flist, pattern):
     best_rank = 9999
     for fpath in flist:
         rank = rankMatching(fpath, pattern)
+        if enable_logging:
+            print("Rank '{}' - '{}': {}".format(fpath, pattern, rank))
+
         ranks.append((rank, fpath))
         best_rank = min(best_rank, rank)
 

@@ -2,8 +2,14 @@
 
 ## Features
 - Quickly open files by typing only part of the name which is unique to it
-- Ability to quickly open .cpp and .h file side-by-side
+- Ability to open .cpp and .h file side-by-side
 - Doesn't display any kind of lists, file is opened immediately
+
+
+## How matching works
+
+- Matching is exact, that is typed pattern has to be a part of opened file name
+- TODO: how ranking works
  
 ## How to use
 
