@@ -6,6 +6,16 @@ import sys
 import re
 import os
 import glob
+import time
+
+enable_logging = False
+
+def logFunc(name, start_time, params):
+    if enable_logging:
+        run_time = time.time() - start_time
+        print("{} time:{}".format(name, run_time))
+        for (key, value) in params:
+            print("  {} = {}".format(key, value))
 
 # TODO: open only single cpp file
 # TODO: jump to line directly
@@ -137,7 +147,6 @@ system_includes = None
 def findProjectDir_():
     pdir = os.path.abspath('.');
     home_dir = os.path.abspath(os.path.expanduser("~"))
-
     maybe_dir = pdir
 
     while True:
@@ -157,7 +166,9 @@ def findProjectDir_():
 
 def findProjectDir():
     global project_dir
+    start_time = time.time()
     project_dir = findProjectDir_()
+    logFunc("findProjectDir", start_time, [("dir", project_dir)])
 
 def extractSystemIncludes(flags):
     out = []
@@ -176,14 +187,16 @@ def loadYCMScript():
 
 
 def fullListing(cur_dir):
-    out = []
+    start_time = time.time()
     files = []
     extensions = [".cpp", ".c", ".h", ".hpp", ".cxx", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".toml", ".scss"]
+    num_total = 0
     
     for dirpath, dirnames, filenames in os.walk(cur_dir, followlinks=True):
         if dirpath.endswith(".git"): 
             continue
             
+        num_total += len(filenames)
         for f in filenames:
             [name, ext] = os.path.splitext(f)
             if  ext in extensions or name.startswith("Makefile"):
@@ -191,19 +204,20 @@ def fullListing(cur_dir):
                 if file_name.startswith("./"):
                     file_name = file_name[2:]
                 files.append(file_name)
-                
-    if len(files) > 0:
-        out.append((cur_dir, files))
-    return out
 
-def matchFiles(pattern, files):
+    logFunc("fullListing", start_time, [('num_matched_ext', len(files)), ('num_total', num_total)])
+    return files
+
+def matchFiles(pattern, proj_dir, files):
+    start_time = time.time()
     pattern = pattern.lower()
     out = []
-    for (fdir, files) in files:
-        for ffile in files:
-            path = os.path.join(fdir, ffile)
-            if pattern in path.lower():
-                out.append(os.path.abspath(path))
+    for ffile in files:
+        path = os.path.join(proj_dir, ffile)
+        if pattern in path.lower():
+            out.append(os.path.abspath(path))
+
+    logFunc("matchFiles", start_time, [('num_matched', len(out))])
     return out
 
 def openCppFile(file_path, split):
@@ -296,7 +310,7 @@ def openCppFiles(pattern, only_best = False):
     global project_dir
 
     all_files = fullListing(project_dir)
-    flist = matchFiles(pattern, all_files)
+    flist = matchFiles(pattern, project_dir, all_files)
     flist = filterLinks(flist)
 
     if len(flist) >= 2 or only_best:
