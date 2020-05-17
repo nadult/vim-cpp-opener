@@ -185,12 +185,12 @@ def loadYCMScript():
     exec(open(ycm_path).read(), dict(), slocals)
     system_includes = extractSystemIncludes(slocals["flags"])
 
-
 def fullListing(cur_dir):
     start_time = time.time()
     files = []
-    extensions = [".cpp", ".c", ".h", ".hpp", ".cxx", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".toml", ".scss"]
     num_total = 0
+    extensions = [".cpp", ".c", ".h", ".hpp", ".cxx", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".toml", ".scss"]
+    regex = re.compile(r'({})$'.format( '|'.join(re.escape(x) for x in extensions) ))
     
     for dirpath, dirnames, filenames in os.walk(cur_dir, followlinks=True):
         if dirpath.endswith(".git"): 
@@ -198,8 +198,7 @@ def fullListing(cur_dir):
             
         num_total += len(filenames)
         for f in filenames:
-            [name, ext] = os.path.splitext(f)
-            if  ext in extensions or name.startswith("Makefile"):
+            if  bool(regex.search(f)):
                 file_name = os.path.join(dirpath, f)
                 if file_name.startswith("./"):
                     file_name = file_name[2:]
