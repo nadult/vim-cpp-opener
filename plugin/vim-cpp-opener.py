@@ -1,12 +1,7 @@
 # Copyright (C) Krzysztof Jakubowski <nadult@fastmail.fm>
 # This file is part of CppOpener. See license.txt for details.
 
-import vim
-import sys
-import re
-import os
-import glob
-import time
+import vim, sys, re, os, glob, time, subprocess, mimetypes
 
 enable_logging = False
 
@@ -17,16 +12,14 @@ def logFunc(name, start_time, params):
         for (key, value) in params:
             print("  {} = {}".format(key, value))
 
+# TODO: better name!
+# TODO: show file selector menu when too many files matched
 # TODO: jump to line directly
-# TODO: better way to find project dir
-# TODO: better filtering (for cmake projects as well)
-# TODO: optional customization file, which will:
 # TODO: quick way to open directory ?
-#  inform about where root dir is
-#  specify matched files
-#  specify filtered dirs
-
-# TODO: when opening two files, do it only if file name is the same
+# TODO: better way to find project dir
+# TODO: inform about where root dir is?
+# TODO: better handling of modified buffers when closing
+# TODO: when opening two files, do it only if base file name is the same?
 
 def extractFileLine(buf, cursor):
     line = buf[cursor[0] - 1]
@@ -143,19 +136,23 @@ def gotoFile(file_path, line, column):
 
 project_dir = None
 system_includes = None
+is_git_project = False
 
+prio_extensions = [".cpp", ".cc", ".c", ".h", ".hpp", ".cxx", ".java", ".m", ".mm", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".json"]
+prio_regex = re.compile(r'({})$'.format( '|'.join(re.escape(x) for x in prio_extensions) ))
+
+# What if we're opened in home directory or even root ?
 def findProjectDir_():
     pdir = os.path.abspath('.');
     home_dir = os.path.abspath(os.path.expanduser("~"))
     maybe_dir = pdir
 
     while True:
-        if os.path.isfile(os.path.join(pdir, "Makefile")):
+        if(os.path.isfile(os.path.join(pdir, "Makefile")) or
+         os.path.isfile(os.path.join(pdir, "CMakeLists.txt")) or
+           os.path.isdir(os.path.join(pdir, ".git")) or
+           os.path.isfile(os.path.join(pdir, ".ycm_extra_conf.py"))):
             maybe_dir = pdir
-        if os.path.isdir(os.path.join(pdir, ".git")):
-            return pdir
-        if os.path.isfile(os.path.join(pdir, ".ycm_extra_conf.py")):
-            return pdir
 
         next_dir = os.path.abspath(os.path.join(pdir, ".."))
         if os.path.ismount(next_dir) or next_dir == home_dir or next_dir == pdir:
@@ -166,9 +163,12 @@ def findProjectDir_():
 
 def findProjectDir():
     global project_dir
+    global is_git_project
+
     start_time = time.time()
     project_dir = findProjectDir_()
-    logFunc("findProjectDir", start_time, [("dir", project_dir)])
+    is_git_project = os.path.isdir(os.path.join(project_dir, ".git"))
+    logFunc("findProjectDir", start_time, [("dir", project_dir), ("is_git_project", is_git_project)])
 
 def extractSystemIncludes(flags):
     out = []
@@ -188,24 +188,60 @@ def loadYCMScript():
 def fullListing(cur_dir):
     start_time = time.time()
     files = []
-    num_total = 0
-    extensions = [".cpp", ".c", ".h", ".hpp", ".cxx", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".toml", ".scss"]
-    regex = re.compile(r'({})$'.format( '|'.join(re.escape(x) for x in extensions) ))
+    count = 0
     
     for dirpath, dirnames, filenames in os.walk(cur_dir, followlinks=True):
-        if dirpath.endswith(".git"): 
-            continue
-            
-        num_total += len(filenames)
+        count += len(filenames)
         for f in filenames:
-            if  bool(regex.search(f)):
-                file_name = os.path.join(dirpath, f)
-                if file_name.startswith("./"):
-                    file_name = file_name[2:]
-                files.append(file_name)
+            file_name = os.path.join(dirpath, f)
+            if file_name.startswith("./"):
+                file_name = file_name[2:]
+            files.append(file_name)
 
-    logFunc("fullListing", start_time, [('num_matched_ext', len(files)), ('num_total', num_total)])
+    logFunc("fullListing", start_time, [('count', count)])
     return files
+
+def filterSubmoduleForeach(prefix, lines):
+    cur_prefix = prefix + "/"
+    out = []
+
+    for line in lines:
+        if line.startswith("Entering '"):
+            cur_prefix = os.path.join(prefix, line[10:-1]) + "/"
+        else:
+            out.append(cur_prefix + line)
+    return out
+
+
+# Returns list of files in git repository.
+# 3 modes are supported: tracked, untracked, ignored
+def gitListing(cur_dir, mode="tracked"):
+    start_time = time.time()
+
+    cmd_untracked = "git ls-files --others --exclude-standard"
+    cmd_ignored   = "git ls-files --others --exclude-standard --ignored"
+
+    cmd_untracked = '{}; git submodule foreach --recursive "{}"'.format(cmd_untracked, cmd_untracked)
+    cmd_tracked   = 'git ls-files --recurse-submodules'
+    cmd_ignored   = '{}; git submodule foreach --recursive "{}"'.format(cmd_ignored, cmd_ignored)
+
+    cmd = (cmd_tracked if (mode == "tracked") else
+          (cmd_untracked if (mode == "untracked") else cmd_ignored));
+        
+    prev_dir = os.getcwd()
+    os.chdir(cur_dir)
+
+    stream = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+    result = stream.stdout.read().decode("utf-8").splitlines()
+    if mode != "tracked":
+        result = filterSubmoduleForeach(cur_dir, result)
+    
+    os.chdir(prev_dir)
+
+    logFunc("gitListing", start_time,
+            [('mode', mode),
+             ('count', len(result))])
+    return result
 
 def matchFiles(pattern, proj_dir, files):
     start_time = time.time()
@@ -226,6 +262,15 @@ def openCppFile(file_path, split):
     if not tryJumpLocationInOpenedTab(file_path):
         vim.command(cmd + file_path)
 
+def isTextFile(file_path):
+    if not os.path.isfile(file_path):
+        return False
+    textchars = bytearray({7,8,9,10,12,13,27} | set(range(0x20, 0x100)) - {0x7f})
+    is_binary_string = lambda bytes: bool(bytes.translate(None, textchars))
+    return not is_binary_string(open(file_path, 'rb').read(1024))
+
+worst_rank = 9999
+
 def rankMatching(file_path, pattern):
     lo_pattern = pattern.lower()
 
@@ -233,44 +278,54 @@ def rankMatching(file_path, pattern):
     if file_name == pattern:
         return 0
     if file_name.lower() == lo_pattern:
-        return 1
+        return 10
 
     (base, ext) = os.path.splitext(file_name)
 
     if pattern == base:
-        return 2
+        return 20
     if lo_pattern == base.lower():
-        return 3
+        return 30
 
     if pattern in base:
-        return 4
+        return 40
     if lo_pattern in base.lower():
-        return 5
+        return 50
 
     if pattern in file_name:
-        return 6
+        return 60
     if lo_pattern in file_name.lower():
-        return 7
+        return 70
 
-    return 9999
+    return worst_rank
 
-def filterBestMatches(flist, pattern):
-    if len(flist) == 0:
+def filterBestMatches(files, pattern):
+    if len(files) == 0:
         return []
 
     pattern = os.path.basename(pattern)
-    ranks = []
-    best_rank = 9999
-    for fpath in flist:
-        rank = rankMatching(fpath, pattern)
-        if enable_logging:
-            print("Rank '{}' - '{}': {}".format(fpath, pattern, rank))
+    ranked_files = []
 
-        ranks.append((rank, fpath))
+    best_rank = worst_rank
+    for fpath in files:
+        rank = rankMatching(fpath, pattern)
+        if rank == worst_rank or not isTextFile(fpath):
+            continue
+
+        # Some extensions have higher priority than others
+        if not bool(prio_regex.search(fpath)):
+            rank += 5
+
+        ranked_files.append((rank, fpath))
         best_rank = min(best_rank, rank)
 
+    if enable_logging:
+        ranked_files.sort()
+        for rank, path in ranked_files:
+            print("Rank '{}': {}".format(path, rank))
+
     out = []
-    for (rank, fpath) in ranks:
+    for (rank, fpath) in ranked_files:
         if(rank == best_rank):
             out.append(fpath)
     return out
@@ -317,38 +372,45 @@ def filterLinks(files):
 
 def openCppFiles(pattern, only_best = False):
     global project_dir
+    global is_git_project
 
-    all_files = fullListing(project_dir)
-    flist = matchFiles(pattern, project_dir, all_files)
-    flist = filterLinks(flist)
+    files = gitListing(project_dir, "tracked") if is_git_project else fullListing(project_dir)
+    files = filterLinks(matchFiles(pattern, project_dir, files))
 
-    if len(flist) >= 2 or only_best:
-        best_list = filterBestMatches(flist, pattern)
+    if len(files) == 0 and is_git_project:
+        files = gitListing(project_dir, "untracked")
+        files = filterLinks(matchFiles(pattern, project_dir, files))
+    if len(files) == 0 and is_git_project:
+        files = gitListing(project_dir, "ignored")
+        files = filterLinks(matchFiles(pattern, project_dir, files))
+
+    if len(files) >= 2 or only_best:
+        best_list = filterBestMatches(files, pattern)
         best_list = filterLinks(best_list)
         if len(best_list) > 0:
-            flist = best_list
+            files = best_list
 
-    if len(flist) == 0:
+    if len(files) == 0:
         print("No cpp files found matching pattern: " + pattern)
-    elif len(flist) == 1:
-        suitable_pairs = findSuitableOpenedFiles(flist[0])
+    elif len(files) == 1:
+        suitable_pairs = findSuitableOpenedFiles(files[0])
         if len(suitable_pairs) == 1:
             tryJumpLocationInOpenedTab(suitable_pairs[0])
-        openCppFile(flist[0], len(vim.windows) == 1)
-    elif len(flist) == 2:
-        if flist[0].endswith(".h"):
-            (flist[0], flist[1]) = (flist[1], flist[0])
-        if isFileOpened(flist[1]):
-            tryJumpLocationInOpenedTab(flist[1])
-            openCppFile(flist[0], True)
+        openCppFile(files[0], len(vim.windows) == 1)
+    elif len(files) == 2:
+        if files[0].endswith(".h"):
+            (files[0], files[1]) = (files[1], files[0])
+        if isFileOpened(files[1]):
+            tryJumpLocationInOpenedTab(files[1])
+            openCppFile(files[0], True)
         else:
-            openCppFile(flist[0], False)
-            openCppFile(flist[1], True)
+            openCppFile(files[0], False)
+            openCppFile(files[1], True)
     else:
-        if len(flist) > 20:
-            flist = flist[0:20]
-            flist.append("...")
-        print("Too many files found: " + str(flist))
+        if len(files) > 40:
+            files = files[0:40]
+            files.append("...")
+        print("Too many files found: " + str(files))
 
 def closeFiles():
     num_windows = len(vim.windows)
