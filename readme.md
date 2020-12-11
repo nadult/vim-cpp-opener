@@ -1,7 +1,9 @@
-# vim-cpp-opener: Quick navigation for C++ projects in Vim
+# vim-cpp-opener: C/C++ project navigator in Vim
+
+![Video](https://user-images.githubusercontent.com/3227675/101957828-7b3b0a00-3c02-11eb-8d63-71f15d1e4efa.gif)
 
 ## Features
-- Instantly open (or goto if they are already opened) files by
+- Instantly open files (or switch to already opened ones) by
   typing only part of the name which is unique to it
 - Ability to open .cpp and .h file side-by-side
 - Doesn't display any kind of lists, file is opened immediately
