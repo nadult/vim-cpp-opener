@@ -134,15 +134,26 @@ def gotoFile(file_path, line, column):
     vim.command("tabedit " + file_path)
     tryJumpLocationInOpenedTab(file_path, line, column)
 
-project_dir = None
-system_includes = None
-is_git_project = False
-
 prio_extensions = [".cpp", ".cc", ".c", ".h", ".hpp", ".cxx", ".java", ".m", ".mm", ".wiki", ".py", ".txt", ".shader", ".vim", ".xml", ".md", ".json"]
 prio_regex = re.compile(r'({})$'.format( '|'.join(re.escape(x) for x in prio_extensions) ))
 
+def getProjectsFromConfig(path):
+    confPath = os.path.join(path, ".vim_cpp_project")
+    if os.path.isfile(confPath):
+        with open(confPath) as file:
+            project_dirs = []
+            project_filters = []
+            for x in file.readlines():
+                x = x.strip()
+                if x.startswith("-"):
+                    project_filters.append(x[1:])
+                elif x:
+                    project_dirs.append(os.path.abspath(os.path.join(path, x)))
+            return project_dirs, project_filters
+    return ([], [])
+
 # What if we're opened in home directory or even root ?
-def findProjectDir_():
+def findProjectDirs_():
     pdir = os.path.abspath('.');
     home_dir = os.path.abspath(os.path.expanduser("~"))
     maybe_dir = pdir
@@ -150,25 +161,30 @@ def findProjectDir_():
     while True:
         if(os.path.isfile(os.path.join(pdir, "Makefile")) or
          os.path.isfile(os.path.join(pdir, "CMakeLists.txt")) or
-           os.path.isdir(os.path.join(pdir, ".git")) or
-           os.path.isfile(os.path.join(pdir, ".ycm_extra_conf.py"))):
+         os.path.isfile(os.path.join(pdir, ".ycm_extra_conf.py")) or
+         os.path.isdir(os.path.join(pdir, ".git"))):
             maybe_dir = pdir
+
+        confProjects, confFilters = getProjectsFromConfig(pdir)
+        if confProjects or confFilters:
+            return (confProjects, confFilters)
 
         next_dir = os.path.abspath(os.path.join(pdir, ".."))
         if os.path.ismount(next_dir) or next_dir == home_dir or next_dir == pdir:
             break
         pdir = next_dir
 
-    return maybe_dir
+    return ([maybe_dir], [])
 
-def findProjectDir():
-    global project_dir
-    global is_git_project
+def isGitProject(path):
+    return os.path.isdir(os.path.join(path, ".git"))
 
+def findProjectDirs():
     start_time = time.time()
-    project_dir = findProjectDir_()
-    is_git_project = os.path.isdir(os.path.join(project_dir, ".git"))
-    logFunc("findProjectDir", start_time, [("dir", project_dir), ("is_git_project", is_git_project)])
+    project_dirs, project_filters = findProjectDirs_()
+    git_dirs = list(filter(isGitProject, project_dirs))
+    logFunc("findProjectDir", start_time, [("dirs", project_dirs), ("filter", project_filters), ("git_dirs", git_dirs)])
+    return project_dirs, project_filters
 
 def extractSystemIncludes(flags):
     out = []
@@ -176,14 +192,6 @@ def extractSystemIncludes(flags):
         if flags[i] == "-isystem" and i+1 < len(flags):
             out.append(flags[i + 1])
     return out
-
-def loadYCMScript():
-    global project_dir
-    global system_includes
-    ycm_path = os.path.join(os.path.abspath(project_dir), ".ycm_extra_conf.py")
-    slocals = dict()
-    exec(open(ycm_path).read(), dict(), slocals)
-    system_includes = extractSystemIncludes(slocals["flags"])
 
 def fullListing(cur_dir):
     start_time = time.time()
@@ -239,7 +247,8 @@ def gitListing(cur_dir, mode="tracked"):
     os.chdir(prev_dir)
 
     logFunc("gitListing", start_time,
-            [('mode', mode),
+            [('cur_dir', cur_dir),
+             ('mode', mode),
              ('count', len(result))])
     return result
 
@@ -370,10 +379,9 @@ def filterLinks(files):
         fout.append(felem)
     return fout
 
-def openCppFiles(pattern, only_best = False):
-    global project_dir
-    global is_git_project
 
+def findCppFiles(project_dir, pattern, only_best = False):
+    is_git_project = isGitProject(project_dir)
     files = gitListing(project_dir, "tracked") if is_git_project else fullListing(project_dir)
     files = filterLinks(matchFiles(pattern, project_dir, files))
 
@@ -383,6 +391,20 @@ def openCppFiles(pattern, only_best = False):
     if len(files) == 0 and is_git_project:
         files = gitListing(project_dir, "ignored")
         files = filterLinks(matchFiles(pattern, project_dir, files))
+    return files
+
+def isNotFiltered(project_filters, item):
+    for filt in project_filters:
+        if filt in item:
+            return False
+    return True
+
+def openCppFiles(project_dirs, project_filters, pattern, only_best = False):
+    files = []
+    for project_dir in project_dirs:
+        files.extend(findCppFiles(project_dir, pattern, only_best))
+
+    files = [file for file in files if isNotFiltered(project_filters, file)]
 
     if len(files) >= 2 or only_best:
         best_list = filterBestMatches(files, pattern)
@@ -392,6 +414,7 @@ def openCppFiles(pattern, only_best = False):
 
     if len(files) == 0:
         print("No cpp files found matching pattern: " + pattern)
+        return
     elif len(files) == 1:
         suitable_pairs = findSuitableOpenedFiles(files[0])
         if len(suitable_pairs) == 1:
@@ -418,17 +441,16 @@ def closeFiles():
         vim.command("q")
 
 if __name__ == "__main__":
-    findProjectDir()
-    #loadYCMScript()
+    project_dirs, project_filters = findProjectDirs()
 
     if sys.argv[0] == "open_file":
-        openCppFiles(sys.argv[1])
+        openCppFiles(project_dirs, project_filters, sys.argv[1])
     elif sys.argv[0] == "close_file":
         closeFiles()
     elif sys.argv[0] == "goto_file":
         file_line = extractFileLine(vim.current.buffer, vim.current.window.cursor)
         if file_line is not None:
-            openCppFiles(file_line[0], only_best=True)
+            openCppFiles(project_dirs, project_filters, file_line[0], only_best=True)
         else:
             print("Invalid target")
     else:
