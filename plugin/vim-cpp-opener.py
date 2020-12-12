@@ -267,9 +267,13 @@ def matchFiles(pattern, proj_dir, files):
 def openCppFile(file_path, split):
     if vim.current.window.width < 140:
         split = False
-    cmd = "vsplit " if split else "tabnew "
+    cmd = ("vsplit " if split else "tabnew ") + file_path
     if not tryJumpLocationInOpenedTab(file_path):
-        vim.command(cmd + file_path)
+        try:
+            vim.command(cmd)
+        except KeyboardInterrupt:
+            pass
+            
 
 def isTextFile(file_path):
     if not os.path.isfile(file_path):
